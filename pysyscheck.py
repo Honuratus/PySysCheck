@@ -13,11 +13,14 @@ class PySysCheck:
         }
 
 
-    
-    def get_cpu_info(self):
-        # add the cpu dict to json
-        self.system_data["device_info"]["cpu"] = {}
+    # read file util function
+    # returns content of the file
+    def _read_file(self, file_path):
+        with open(file_path, "r") as f:
+            content = f.read()
+        return content
 
+    def _parse_cpu_data(self, content):
         # init a cpu_data
         cpu_data = {
                 "vendor": "Unknown",
@@ -28,60 +31,65 @@ class PySysCheck:
                 "cpu_model": "Unknown",
                 "cache": "Unknown"
         }
-        try:
-            # open the cpuinfo file
-            with open("/proc/cpuinfo","r") as f:
-                # read the content
-                content = f.read()
+        # parse the logical thread and check error
+        cpu_groups = content.strip().split("\n\n")
+        if not cpu_groups: return
+
+        # just take the first logical thread
+        for line in cpu_groups[0].split("\n"):
+            if ": " not in line: continue
+
+            # extract the value of each line 
+            # example line: "cpuid level     : 16" 
+            key,value = line.split(":",1)
+            value = value.strip()
+            key = key.strip()
+
+
+            # save each value in their respective position
+            if "vendor_id" in key:
+                cpu_data['vendor'] = value
             
-            # parse the logical thread and check error
-            cpu_groups = content.strip().split("\n\n")
-            if not cpu_groups: return
+            elif "model name" in key:
+                cpu_data['model_name'] = value
 
-            # just take the first logical thread
-            for line in cpu_groups[0].split("\n"):
-                if ": " not in line: continue
+            elif key=="model":
+                if value.isdigit():
+                    cpu_data['cpu_model'] = int(value)
 
-                # extract the value of each line 
-                # example line: "cpuid level     : 16" 
-                key,value = line.split(":",1)
-                value = value.strip()
-                key = key.strip()
+            
+            elif "siblings" in key:
+                if value.isdigit():
+                    cpu_data['topology']['logical_threads'] = int(value)
 
+            elif "cpu cores" in key:
+                if value.isdigit():
+                    cpu_data['topology']['physical_cores'] = int(value)
 
-                # save each value in their respective position
-                if "vendor_id" in key:
-                    cpu_data['vendor'] = value
+            elif "cache size" in key:
+                cpu_data['cache'] = value
+
+            elif "cpu family" in key:            
+                if value.isdigit():
+                    cpu_data['cpu_family'] = int(value)
+                    
+
+            elif "flags" in key:
+                if "svm" in value or "vmx" in value:
+                    cpu_data['virtualization_support'] = True
                 
-                elif "model name" in key:
-                    cpu_data['model_name'] = value
+        return cpu_data
 
-                elif key=="model":
-                    if value.isdigit():
-                        cpu_data['cpu_model'] = int(value)
+    def get_cpu_info(self):
+        # add the cpu dict to json
+        self.system_data["device_info"]["cpu"] = {}
 
-                
-                elif "siblings" in key:
-                    if value.isdigit():
-                        cpu_data['topology']['logical_threads'] = int(value)
-
-                elif "cpu cores" in key:
-                    if value.isdigit():
-                        cpu_data['topology']['physical_cores'] = int(value)
-
-                elif "cache size" in key:
-                    cpu_data['cache'] = value
-
-                elif "cpu family" in key:            
-                    if value.isdigit():
-                        cpu_data['cpu_family'] = int(value)
-                        
-
-                elif "flags" in key:
-                    if "svm" in value or "vmx" in value:
-                        cpu_data['virtualization_support'] = True
-                
-        
+        try:
+            content = self._read_file("/proc/cpuinfo")
+            if not content:
+                self.system_data['device_info']['cpu'] = f"error: cpuinfo is empty"
+            
+            cpu_data = self._parse_cpu_data(content)
             self.system_data['device_info']['cpu'] = cpu_data
 
         # if /proc/cpuinfo doesn't exist
@@ -98,4 +106,7 @@ class PySysCheck:
 
 
 
-
+#if __name__ == "__main__":
+    #psc = PySysCheck()
+    #psc.get_cpu_info()
+    #print(json.dumps(psc.system_data, indent=4))
