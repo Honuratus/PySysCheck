@@ -21,6 +21,12 @@ class PySysCheck:
             content = f.read()
         return content
 
+    def _run_command(self, command_list):
+        output = subprocess.run(command_list, capture_output=True, text=True)
+        if output.returncode == 0:
+            return output.stdout
+        return None
+
     def _parse_cpu_data(self, content):
         # init a cpu_data
         cpu_data = {
@@ -112,12 +118,35 @@ class PySysCheck:
                 mem_data[self._map_memory_key(key)] = f"{result_gb:.2f} GB"
 
         return mem_data
+    
+    def _parse_usb_data(self, content):
+        usb_list = []
+
+        for line in content.split("\n"):
+            if not line: continue
+
+            if 'ID' in line:
+                parts = line.split('ID')
+                if len(parts) > 1:
+
+                    raw_info = parts[1].strip()
+
+                    # ID Fomrat: "XXXX:XXXX" 
+                    # skip the first 9 char and 1 whitespace
+                    device_name = raw_info[10:].strip()
+
+                    if not device_name:
+                        device_name = raw_info
+                
+                usb_list.append(device_name)
+        return usb_list
+
 
     def get_cpu_info(self):
         try:
             content = self._read_file("/proc/cpuinfo")
             if not content:
-                self.system_data['device_info']['cpu'] = f"error: cpuinfo is empty"
+                self.system_data['device_info']['cpu'] = {"error" : "cpuinfo is empty"}
             
             cpu_data = self._parse_cpu_data(content)
             self.system_data['device_info']['cpu'] = cpu_data
@@ -135,7 +164,7 @@ class PySysCheck:
         try:
             content = self._read_file("/proc/meminfo")
             if not content:
-                self.system_data['device_info']['memory'] = f"error: meminfo is empty"
+                self.system_data['device_info']['memory'] = {"error": "meminfo is empty"}
             
             mem_data = self._parse_memory_data(content)
             self.system_data['device_info']['memory'] = mem_data
@@ -149,13 +178,20 @@ class PySysCheck:
             self.system_data['device_info']['memory'] = {"error": f"Parsing error: {str(e)}"}
 
 
+    def get_usb_data(self):
+        try:
+            content = self._run_command(["lsusb"])
+            
+            if not content:
+                self.system_data['device_info']['usb'] = {"error" : "lsusb command failed or returned empty"}
+                return
+            
+            usb_data = self._parse_usb_data(content)
+            self.system_data['device_info']["usb"] = usb_data
+
+        except FileNotFoundError:
+             self.system_data['device_info']['usb'] = {"error": "lsusb command not found"}
+        except Exception as e:
+            self.system_data['device_info']['usb'] = {"error" : f"{str(e)}"}
 
 
-
-
-
-if __name__ == "__main__":
-    psc = PySysCheck()
-    psc.get_cpu_info()
-    psc.get_memory_info()
-    print(json.dumps(psc.system_data, indent=4))
