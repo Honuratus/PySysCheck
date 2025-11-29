@@ -2,6 +2,7 @@ import os
 import subprocess
 import json
 import datetime
+import decimal
 
 class PySysCheck:
     def __init__(self):
@@ -80,10 +81,39 @@ class PySysCheck:
                 
         return cpu_data
 
-    def get_cpu_info(self):
-        # add the cpu dict to json
-        self.system_data["device_info"]["cpu"] = {}
+    def _map_memory_key(self, key):
+        if key == "MemTotal":
+            return "mem_total"
+        elif key == "MemAvailable":
+            return "mem_available"
+        elif key == "SwapTotal":
+            return "swap_total"
+        
+    def _parse_memory_data(self, content):
+        mem_data = {}
 
+        for line in content.split("\n"):
+            if ": " not in line: continue
+
+            # Parsing
+            key,value = line.split(":",1)
+            value = value.strip()
+            key = key.strip()
+
+            if key in ["MemTotal","MemAvailable", "SwapTotal"]:
+                clean_value = value.split("kB")[0].strip()
+
+                base = decimal.Decimal(int(clean_value))
+                divisor = decimal.Decimal(1024*1024)
+
+                result_gb = base / divisor
+
+
+                mem_data[self._map_memory_key(key)] = f"{result_gb:.2f} GB"
+
+        return mem_data
+
+    def get_cpu_info(self):
         try:
             content = self._read_file("/proc/cpuinfo")
             if not content:
@@ -99,6 +129,24 @@ class PySysCheck:
         # any unknown exception
         except Exception as e:
             self.system_data['device_info']['cpu'] = {"error": f"Parsing error: {str(e)}"}
+    
+
+    def get_memory_info(self):
+        try:
+            content = self._read_file("/proc/meminfo")
+            if not content:
+                self.system_data['device_info']['memory'] = f"error: meminfo is empty"
+            
+            mem_data = self._parse_memory_data(content)
+            self.system_data['device_info']['memory'] = mem_data
+
+        # if /proc/meminfo doesn't exist
+        except FileNotFoundError:
+            self.system_data['device_info']['memory'] = {"error": "/proc/meminfo not found"}
+
+        # any unknown exception
+        except Exception as e:
+            self.system_data['device_info']['memory'] = {"error": f"Parsing error: {str(e)}"}
 
 
 
@@ -106,7 +154,8 @@ class PySysCheck:
 
 
 
-#if __name__ == "__main__":
-    #psc = PySysCheck()
-    #psc.get_cpu_info()
-    #print(json.dumps(psc.system_data, indent=4))
+if __name__ == "__main__":
+    psc = PySysCheck()
+    psc.get_cpu_info()
+    psc.get_memory_info()
+    print(json.dumps(psc.system_data, indent=4))
