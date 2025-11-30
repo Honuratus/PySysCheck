@@ -54,7 +54,9 @@ class CpuProbe(Probe):
                     cpu_data['topology']['physical_cores'] = int(value)
 
             elif 'cache size' in key:
-                cpu_data['cache'] = value
+                parts = value.split()
+                if parts and parts[0].isdigit():
+                    cpu_data['cache'] = value
 
             elif 'cpu family' in key:            
                 if value.isdigit():
