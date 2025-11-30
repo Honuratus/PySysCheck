@@ -141,6 +141,41 @@ class PySysCheck:
                 usb_list.append(device_name)
         return usb_list
 
+    # third line is kernel version 
+
+    def _parse_kernel_info(self, content):
+        kernel_data = {"version": "Unknown", "build_date": "Unknown", "smp_support": False}
+        if not content: return kernel_data
+
+        if "SMP" in content:
+            kernel_data['smp_support'] = True
+
+
+        parts = content.split()
+        if len(parts) > 2:
+            kernel_data['version'] = parts[2].strip()
+
+        if "#" in content:
+            parts = content.split('#')
+            if len(parts) > 1:
+                right_parts = parts[1].split()[3:]
+                build_date = ' '.join(right_parts)
+                kernel_data['build_date'] = build_date
+        
+        return kernel_data
+    
+
+    def _parse_distro_info(self, content):
+        distro_name = "Unknown Linux"
+        if not content: return distro_name
+        
+        for line in content.split("\n"):
+            if line.startswith('PRETTY_NAME='):
+                distro_name = line.split('=',1)[1].replace('"', '').strip()
+                break
+
+        return distro_name
+
 
     def get_cpu_info(self):
         try:
@@ -232,11 +267,34 @@ class PySysCheck:
             self.system_data['device_info']['network'] = {'error': f'Network scan error: {str(e)}'}
         
 
+    def get_os_info(self):
+        self.system_data['device_info']['os'] = {}
+        
+        try:
+            kernel_content = self._read_file('/proc/version')
+
+            kernel_data = self._parse_kernel_info(kernel_content)
+
+
+            self.system_data['device_info']['os'] = kernel_data
+        except Exception as e:
+            self.system_data['device_info']['os'] = {'error': f'Kernel parse error: {e}'}
+        
+
+        try:
+            distro_content = self._read_file('/etc/os-release')
+            distro_name = self._parse_distro_info(distro_content)
+            self.system_data['device_info']['os']['distro'] = distro_name
+        except:
+            self.system_data['device_info']['os']['distro'] = "Unknown"
+
+
     def save_report(self):
         self.get_cpu_info()
         self.get_memory_info()
         self.get_network_info()
         self.get_usb_info()
+        self.get_os_info()
         filename = f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         try:
             with open(filename, 'w') as f:
