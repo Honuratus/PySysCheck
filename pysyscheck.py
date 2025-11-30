@@ -218,8 +218,34 @@ class PySysCheck:
             disk_data['size'] = "Unknown"
         return disk_data
 
-        
+    def _parse_gpu_data(self, content):
+        gpus = []
+        if not content: return gpus
 
+        for line in content.split("\n"):
+            if 'VGA' in line or '3D Controller' in line:
+                parts = line.split(':', 2)
+                if len(parts) > 2:
+                    full_name = parts[2].strip()
+                    vendor = full_name.split()[0]
+                    if vendor == 'Advanced':
+                        vendor = 'AMD'
+                    gpus.append({'model': full_name, 'vendor': vendor})
+        return gpus
+
+    def get_gpu_info(self):
+        try:
+            content = self._run_command(['lspci'])
+            if not content:
+                self.system_data['device_info']['gpu'] = [{'error': 'lspci failed'}]
+                return
+            
+            gpu_data = self._parse_gpu_data(content)
+            self.system_data['device_info']['gpu'] = gpu_data
+        except FileNotFoundError:
+            self.system_data['device_info']['gpu'] = [{"error": "lspci not found"}]
+        except Exception as e:
+            self.system_data['device_info']['gpu'] = [{"error": str(e)}]
     def get_cpu_info(self):
         try:
             content = self._read_file('/proc/cpuinfo')
@@ -363,6 +389,7 @@ class PySysCheck:
         self.get_usb_info()
         self.get_os_info()
         self.get_disk_info()
+        self.get_gpu_info()
         filename = f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         try:
             with open(filename, 'w') as f:
