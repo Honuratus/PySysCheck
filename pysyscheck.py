@@ -1,416 +1,41 @@
-import os
-import subprocess
+import argparse
 import json
 import datetime
-import decimal
+import sys
+
+
+from src.probes.cpu import CpuProbe
+from src.probes.memory import MemoryProbe
+from src.probes.disk import DiskProbe
+from src.probes.network import NetworkProbe
+from src.probes.usb import UsbProbe
+from src.probes.gpu import GpuProbe
+from src.probes.os_probe import OsProbe
 
 class PySysCheck:
     def __init__(self):
         # init the initial json data
-        self.system_data = {
+        self.report = {
             'timestamp': str(datetime.datetime.now()),
             'report_name': 'PySysCheck Hardware Report',
             'device_info': {}
         }
 
-
-    # read file util function
-    # returns content of the file
-    def _read_file(self, file_path):
-        with open(file_path, "r") as f:
-            content = f.read()
-        return content
-
-    def _run_command(self, command_list):
-        output = subprocess.run(command_list, capture_output=True, text=True)
-        if output.returncode == 0:
-            return output.stdout
-        return None
-
-    def _parse_cpu_data(self, content):
-        # init a cpu_data
-        cpu_data = {
-                'vendor': 'Unknown',
-                'model_name': 'Unknown',
-                'topology': {'physical_cores': 0, 'logical_threads': 0},
-                'virtualization_support': False,
-                'cpu_family': 'Unknown',
-                'cpu_model': 'Unknown',
-                'cache': 'Unknown'
+        # probes map
+        self.probes = {
+            'cpu': CpuProbe(),
+            'memory': MemoryProbe(),
+            'disk': DiskProbe(),
+            'network': NetworkProbe(),
+            'usb': UsbProbe(),
+            'gpu': GpuProbe(),
+            'os': OsProbe()
         }
-        # parse the logical thread and check error
-        cpu_groups = content.strip().split("\n\n")
-        if not cpu_groups: return
-
-        # just take the first logical thread
-        for line in cpu_groups[0].split("\n"):
-            if ": " not in line: continue
-
-            # extract the value of each line 
-            # example line: "cpuid level     : 16" 
-            key,value = line.split(":",1)
-            value = value.strip()
-            key = key.strip()
-
-
-            # save each value in their respective position
-            if 'vendor_id' in key:
-                cpu_data['vendor'] = value
-            
-            elif 'model name' in key:
-                cpu_data['model_name'] = value
-
-            elif key == 'model':
-                if value.isdigit():
-                    cpu_data['cpu_model'] = int(value)
-
-            
-            elif 'siblings' in key:
-                if value.isdigit():
-                    cpu_data['topology']['logical_threads'] = int(value)
-
-            elif 'cpu cores' in key:
-                if value.isdigit():
-                    cpu_data['topology']['physical_cores'] = int(value)
-
-            elif 'cache size' in key:
-                cpu_data['cache'] = value
-
-            elif 'cpu family' in key:            
-                if value.isdigit():
-                    cpu_data['cpu_family'] = int(value)
-                    
-
-            elif 'flags' in key:
-                if 'svm' in value or 'vmx' in value:
-                    cpu_data['virtualization_support'] = True
-                
-        return cpu_data
-
-    def _map_memory_key(self, key):
-        if key == 'MemTotal':
-            return 'mem_total'
-        elif key == 'MemAvailable':
-            return 'mem_available'
-        elif key == 'SwapTotal':
-            return 'swap_total'
-        
-    def _parse_memory_data(self, content):
-        mem_data = {}
-
-        for line in content.split("\n"):
-            if ": " not in line: continue
-
-            # Parsing
-            key,value = line.split(":",1)
-            value = value.strip()
-            key = key.strip()
-
-            if key in ['MemTotal','MemAvailable', 'SwapTotal']:
-                clean_value = value.split("kB")[0].strip()
-
-                base = decimal.Decimal(int(clean_value))
-                divisor = decimal.Decimal(1024*1024)
-
-                result_gb = base / divisor
-
-
-                mem_data[self._map_memory_key(key)] = f"{result_gb:.2f} GB"
-
-        return mem_data
-    
-    def _parse_usb_data(self, content):
-        usb_list = []
-
-        for line in content.split("\n"):
-            if not line: continue
-
-            if 'ID' in line:
-                parts = line.split('ID')
-                if len(parts) > 1:
-
-                    raw_info = parts[1].strip()
-
-                    # ID Fomrat: "XXXX:XXXX" 
-                    # skip the first 9 char and 1 whitespace
-                    device_name = raw_info[10:].strip()
-
-                    if not device_name:
-                        device_name = raw_info
-                
-                usb_list.append(device_name)
-        return usb_list
-
-    # third line is kernel version 
-
-    def _parse_kernel_data(self, content):
-        kernel_data = {"version": "Unknown", "build_date": "Unknown", "smp_support": False}
-        if not content: return kernel_data
-
-        if "SMP" in content:
-            kernel_data['smp_support'] = True
-
-
-        parts = content.split()
-        if len(parts) > 2:
-            kernel_data['version'] = parts[2].strip()
-
-        if "#" in content:
-            parts = content.split('#')
-            if len(parts) > 1:
-                right_parts = parts[1].split()[3:]
-                build_date = ' '.join(right_parts)
-                kernel_data['build_date'] = build_date
-        
-        return kernel_data
-    
-
-    def _parse_distro_data(self, content):
-        distro_name = "Unknown Linux"
-        if not content: return distro_name
-        
-        for line in content.split("\n"):
-            if line.startswith('PRETTY_NAME='):
-                distro_name = line.split('=',1)[1].replace('"', '').strip()
-                break
-
-        return distro_name
-
-
-    def _parse_disk_data(self, disk_name):
-        disk_data = {"model": "Unknown", "type": "Unknown", "size": "Unknown"}
-        base_path = f'/sys/block/{disk_name}'
-
-        # model reading
-        try:
-            disk_model = self._read_file(f'{base_path}/device/model')
-            if disk_model:
-                disk_data['model'] = disk_model.strip()
-        except:
-            pass # if model file not found it will remian unknown
-            
-        # type reading
-        try:
-            disk_type = self._read_file(f'{base_path}/queue/rotational')
-            if disk_type:
-                # 0 SSD
-                # 1 HDD
-                disk_data['type'] = "SSD" if disk_type.strip() == '0' else "HDD"
-        except:
-            pass
-
-
-        # size calculation
-        try:
-            size_content = self._read_file(f'{base_path}/size')
-
-            if size_content:
-                disk_size = int(size_content.strip())
-
-                byte_size = disk_size * 512
-
-                base = decimal.Decimal(byte_size)
-                divisor = decimal.Decimal(1024**3)
-
-                gb_size = base / divisor
-                disk_data['size'] = f'{gb_size:.2f} GB'
-        except Exception:
-            disk_data['size'] = "Unknown"
-        return disk_data
-
-    def _parse_gpu_data(self, content):
-        gpus = []
-        if not content: return gpus
-
-        for line in content.split("\n"):
-            if 'VGA' in line or '3D Controller' in line:
-                parts = line.split(':', 2)
-                if len(parts) > 2:
-                    full_name = parts[2].strip()
-                    vendor = full_name.split()[0]
-                    if vendor == 'Advanced':
-                        vendor = 'AMD'
-                    gpus.append({'model': full_name, 'vendor': vendor})
-        return gpus
-
-    def _check_hotplug_events(self):
-        hotplug_data = {"status": "Inactive", "recent_events": []}
-        try:
-            output = self._run_command(['dmesg'])
-            # sudo privaliges not granted
-            # or dmesg failed
-            if not output:
-                hotplug_data["status"] = "Permission Denied / Empty"
-                return hotplug_data
-
-            lines = output.split('\n')
-            found_events = []
-
-
-            # just look the last 10 events
-            for line in  reversed(lines):
-                if len(found_events) > 10: break
-                    
-                line_lower = line.lower()
-                if 'usb' in line and ('new' in line or 'disconnect' in line):
-                    found_events.append(line.strip())
-            if found_events:
-                hotplug_data["status"] = "Active"
-                hotplug_data["recent_events"] = found_events 
-
-        except Exception as e:
-            hotplug_data["error"] = f"Error parsing dmesg: {str(e)}"
-
-        return hotplug_data
-
-    def get_gpu_info(self):
-        try:
-            content = self._run_command(['lspci'])
-            if not content:
-                self.system_data['device_info']['gpu'] = [{'error': 'lspci failed'}]
-                return
-            
-            gpu_data = self._parse_gpu_data(content)
-            self.system_data['device_info']['gpu'] = gpu_data
-        except FileNotFoundError:
-            self.system_data['device_info']['gpu'] = [{"error": "lspci not found"}]
-        except Exception as e:
-            self.system_data['device_info']['gpu'] = [{"error": str(e)}]
-    def get_cpu_info(self):
-        try:
-            content = self._read_file('/proc/cpuinfo')
-            if not content:
-                self.system_data['device_info']['cpu'] = {'error' : 'cpuinfo is empty'}
-            
-            cpu_data = self._parse_cpu_data(content)
-            self.system_data['device_info']['cpu'] = cpu_data
-
-        # if /proc/cpuinfo doesn't exist
-        except FileNotFoundError:
-            self.system_data['device_info']['cpu'] = {'error': '/proc/cpuinfo not found'}
-
-        # any unknown exception
-        except Exception as e:
-            self.system_data['device_info']['cpu'] = {'error': f'Parsing error: {str(e)}'}
-    
-
-    def get_memory_info(self):
-        try:
-            content = self._read_file('/proc/meminfo')
-            if not content:
-                self.system_data['device_info']['memory'] = {'error': 'meminfo is empty'}
-            
-            mem_data = self._parse_memory_data(content)
-            self.system_data['device_info']['memory'] = mem_data
-
-        # if /proc/meminfo doesn't exist
-        except FileNotFoundError:
-            self.system_data['device_info']['memory'] = {'error': '/proc/meminfo not found'}
-
-        # any unknown exception
-        except Exception as e:
-            self.system_data['device_info']['memory'] = {'error': f'Parsing error: {str(e)}'}
-
-
-    def get_usb_info(self):
-        try:
-            content = self._run_command(['lsusb'])
-            
-            if not content:
-                self.system_data['device_info']['usb'] = [{'error' : 'lsusb command failed or returned empty'}]
-                return
-            
-            usb_data = self._parse_usb_data(content)
-            self.system_data['device_info']["usb"] = usb_data
-
-        except FileNotFoundError:
-             self.system_data['device_info']['usb'] = [{'error': 'lsusb command not found'}]
-        except Exception as e:
-            self.system_data['device_info']['usb'] = [{'error': f'{str(e)}'}]
-
-    def get_network_info(self):
-        self.system_data['device_info']['network'] = {}
-        net_path = '/sys/class/net'
-        
-        try:
-            if not os.path.exists(net_path):
-                self.system_data['device_info']['network'] = {'error': '/sys/class/net not found'}
-                return
-
-            for iface in os.listdir(net_path):
-                # skip the localhost
-                if iface == 'lo': continue 
-                
-                # init interface dict
-                iface_info = {'mac': 'Unknown', 'state': 'Unknown'}
-                
-                # create folder paths
-                mac_path = os.path.join(net_path, iface, 'address')
-                state_path = os.path.join(net_path, iface, 'operstate')
-                
-                # read the mac address files
-                try:
-                    mac = self._read_file(mac_path).strip()
-                    if mac: iface_info['mac'] = mac
-                except: pass
-
-                # read the state files
-                try:
-                    state = self._read_file(state_path).strip()
-                    if state: iface_info['state'] = state
-                except: pass
-                
-                self.system_data['device_info']['network'][iface] = iface_info
-
-        except Exception as e:
-            self.system_data['device_info']['network'] = {'error': f'Network scan error: {str(e)}'}
-        
-
-    def get_os_info(self):
-        self.system_data['device_info']['os'] = {}
-        
-        try:
-            kernel_content = self._read_file('/proc/version')
-
-            kernel_data = self._parse_kernel_data(kernel_content)
-
-
-            self.system_data['device_info']['os'] = kernel_data
-        except Exception as e:
-            self.system_data['device_info']['os'] = {'error': f'Kernel parse error: {e}'}
-        
-
-        try:
-            distro_content = self._read_file('/etc/os-release')
-            distro_name = self._parse_distro_data(distro_content)
-            self.system_data['device_info']['os']['distro'] = distro_name
-        except:
-            self.system_data['device_info']['os']['distro'] = "Unknown"
-
-    def get_disk_info(self):
-        self.system_data['device_info']['disk'] = {}
-        block_path = '/sys/block'
-
-        try:
-            if not os.path.exists(block_path):
-                self.system_data['device_info']['disk'] = {'error': '/sys/block not found'}
-                return
-
-            for block in os.listdir(block_path):
-                # loop (virtual disk)
-                # ram (ram disk)
-                # sr (CD-ROM)
-                # skip all the above
-                if (block.startswith('loop')) or (block.startswith('ram')) or (block.startswith("sr")):
-                    continue
-
-                disk_data = self._parse_disk_data(block)
-                self.system_data['device_info']['disk'][block] = disk_data
-
-        except Exception as e:
-            self.system_data['device_info']['disk'] = {'error' : f'Disk scan error: {e}'}
 
     def perform_health_checks(self):
+        """
+        analyzes gathered data to generate PASS/FAIL results
+        """
         checks = {
             'usb_subsystem_active' : 'FAIL',
             'gpu_detected': 'FAIL',
@@ -418,22 +43,32 @@ class PySysCheck:
             'ssd_present': 'FAIL'
         }
 
-        dev_info = self.system_data.get('device_info', {})
 
-        hotplug_data = self._check_hotplug_events()
-        self.system_data['device_info']['hotplug_analysis'] = hotplug_data
+        dev_info = self.report.get('device_info', {})
+
+        # hotplug and usb check
+        try:
+            hotplug_data = self.probes['usb'].get_hotplug_events()
+            self.report['device_info']['hotplug_analysis'] = hotplug_data
+            
+            is_hotplug_active = hotplug_data.get('status') == 'Active'
+        except:
+            is_hotplug_active = False
 
         usb_list = dev_info.get('usb', [])
-        has_usb_devices = usb_list and isinstance(usb_list, list) and 'error'not in str(usb_list[0]).lower()
-        is_hotplug_active = hotplug_data.get('status') == 'Active'
+        
+        # error handling
+        has_usb_devices = usb_list and isinstance(usb_list, list) and 'error' not in str(usb_list[0]).lower()
 
         if has_usb_devices or is_hotplug_active:
             checks['usb_subsystem_active'] = 'PASS'
 
+        # GPU check
         gpus = dev_info.get('gpu', [])
         if gpus and isinstance(gpus, list) and "error" not in str(gpus[0]).lower():
             checks['gpu_detected'] = "PASS"
 
+        # network check
         net_info = dev_info.get('network', {})
         if isinstance(net_info, dict) and "error" not in net_info:
             for iface, details in net_info.items():
@@ -441,7 +76,7 @@ class PySysCheck:
                     checks['network_connectivity'] = "PASS"
                     break
 
-
+        # SSD check
         disk_info = dev_info.get('disk', {})
         if isinstance(disk_info, dict) and "error" not in disk_info:
             for disk, details in disk_info.items():
@@ -449,40 +84,86 @@ class PySysCheck:
                     checks['ssd_present'] = "PASS"
                     break
         
-        self.system_data['test_results'] = checks
+        
+        self.report['test_results'] = checks
 
+    def run_check(self, check_type='all'):
+        """
+        executes selected probes
+        """
+        if check_type == 'all':
+            print("[*] Running all checks...")
+            for name, probe in self.probes.items():
+                try:
+                    self.report['device_info'][name] = probe.run_probe()
+                except Exception as e:
+                    self.report['device_info'][name] = {'error': str(e)}
 
-    def run_all_checks(self):
-        print("Starting PySysCheck hardware probe...")
-        self.get_cpu_info()
-        self.get_memory_info()
-        self.get_disk_info()   # Storage eklendi
-        self.get_usb_info()
-        self.get_network_info()
-        self.get_os_info()     # OS/Kernel eklendi
-        self.get_gpu_info()    # GPU eklendi
+        elif check_type in self.probes:
+            print(f"[*] Running {check_type.upper()} check...")
+            try:
+                self.report['device_info'][check_type] = self.probes[check_type].run_probe()
+            except Exception as e:
+                self.report['device_info'][check_type] = {'error': str(e)}
+        else:
+            print(f"[!] Unknown check type: {check_type}")
 
-        print("System probe completed.")
+        
+        if check_type == 'all':
+            print('[*] Performing health analysis...')
+            self.perform_health_checks()
 
-        # Analiz Modülü (YENİ)
-        print("Running automated health checks...")
-        self.perform_health_checks()
-
-        print("health checks completed.")
-
-
-
-    def save_report(self):
-        filename = f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+    def save_report(self, filename):
+        """
+        saves JSON report to file.
+        """
         try:
             with open(filename, 'w') as f:
-                json.dump(self.system_data,f, indent=4)
-            print(f'Report saved successfully: {filename}')
+                json.dump(self.report, f, indent=4)
+            print(f'[*] Report saved successfully: {filename}')
         except Exception as e:
-            print(f'Error saving report: {e}')
+            print(f'[!] Error saving report: {e}')
+
+    def print_stdout(self):
+        """
+        prints JSON to console
+        """
+        print(json.dumps(self.report, indent=4))
+
+
+def main():
+    parser = argparse.ArgumentParser(description='PySysCheck: Linux Hardware Probing Tool')
+
+    # CLI Arguments
+    parser.add_argument('--check', '-c', 
+                        choices=['all', 'cpu', 'memory', 'disk', 'network', 'usb', 'gpu', 'os'], 
+                        default='all', 
+                        help="Specific hardware to check (default: all)")
+
+    parser.add_argument('--output', '-o', 
+                        help="Custom output filename", 
+                        default=f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json")
+    
+    parser.add_argument('--no-file', action='store_true', 
+                        help="Don't save to file, print to console only")
+    
+    parser.add_argument('--verbose', '-v', action='store_true', 
+                        help="Print output to console even if saving to file")
+    
+    args = parser.parse_args()
+
+
+    # application logic
+    app = PySysCheck()
+    app.run_check(args.check)
+
+    if args.no_file:
+        app.print_stdout()
+    else:
+        app.save_report(args.output)
+        if args.verbose:
+            app.print_stdout()
 
 
 if __name__ == '__main__':
-    psc = PySysCheck()
-    psc.run_all_checks()
-    psc.save_report()
+    main()
