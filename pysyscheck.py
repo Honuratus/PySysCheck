@@ -143,7 +143,7 @@ class PySysCheck:
 
     # third line is kernel version 
 
-    def _parse_kernel_info(self, content):
+    def _parse_kernel_data(self, content):
         kernel_data = {"version": "Unknown", "build_date": "Unknown", "smp_support": False}
         if not content: return kernel_data
 
@@ -165,7 +165,7 @@ class PySysCheck:
         return kernel_data
     
 
-    def _parse_distro_info(self, content):
+    def _parse_distro_data(self, content):
         distro_name = "Unknown Linux"
         if not content: return distro_name
         
@@ -176,6 +176,49 @@ class PySysCheck:
 
         return distro_name
 
+
+    def _parse_disk_data(self, disk_name):
+        disk_data = {"model": "Unknown", "type": "Unknown", "size": "Unknown"}
+        base_path = f'/sys/block/{disk_name}'
+
+        # model reading
+        try:
+            disk_model = self._read_file(f'{base_path}/device/model')
+            if disk_model:
+                disk_data['model'] = disk_model.strip()
+        except:
+            pass # if model file not found it will remian unknown
+            
+        # type reading
+        try:
+            disk_type = self._read_file(f'{base_path}/queue/rotational')
+            if disk_type:
+                # 0 SSD
+                # 1 HDD
+                disk_data['type'] = "SSD" if disk_type.strip() == '0' else "HDD"
+        except:
+            pass
+
+
+        # size calculation
+        try:
+            size_content = self._read_file(f'{base_path}/size')
+
+            if size_content:
+                disk_size = int(size_content.strip())
+
+                byte_size = disk_size * 512
+
+                base = decimal.Decimal(byte_size)
+                divisor = decimal.Decimal(1024**3)
+
+                gb_size = base / divisor
+                disk_data['size'] = f'{gb_size:.2f} GB'
+        except Exception:
+            disk_data['size'] = "Unknown"
+        return disk_data
+
+        
 
     def get_cpu_info(self):
         try:
@@ -273,7 +316,7 @@ class PySysCheck:
         try:
             kernel_content = self._read_file('/proc/version')
 
-            kernel_data = self._parse_kernel_info(kernel_content)
+            kernel_data = self._parse_kernel_data(kernel_content)
 
 
             self.system_data['device_info']['os'] = kernel_data
@@ -283,10 +326,34 @@ class PySysCheck:
 
         try:
             distro_content = self._read_file('/etc/os-release')
-            distro_name = self._parse_distro_info(distro_content)
+            distro_name = self._parse_distro_data(distro_content)
             self.system_data['device_info']['os']['distro'] = distro_name
         except:
             self.system_data['device_info']['os']['distro'] = "Unknown"
+
+    def get_disk_info(self):
+        self.system_data['device_info']['disk'] = {}
+        block_path = '/sys/block'
+
+        try:
+            if not os.path.exists(block_path):
+                self.system_data['device_info']['disk'] = {'error': '/sys/block not found'}
+                return
+
+            for block in os.listdir(block_path):
+                # loop (virtual disk)
+                # ram (ram disk)
+                # sr (CD-ROM)
+                # skip all the above
+                if (block.startswith('loop')) or (block.startswith('ram')) or (block.startswith("sr")):
+                    continue
+
+                disk_data = self._parse_disk_data(block)
+                self.system_data['device_info']['disk'][block] = disk_data
+
+        except Exception as e:
+            self.system_data['device_info']['disk'] = {'error' : f'Disk scan error: {e}'}
+
 
 
     def save_report(self):
@@ -295,6 +362,7 @@ class PySysCheck:
         self.get_network_info()
         self.get_usb_info()
         self.get_os_info()
+        self.get_disk_info()
         filename = f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         try:
             with open(filename, 'w') as f:
