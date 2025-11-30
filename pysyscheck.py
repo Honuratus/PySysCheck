@@ -8,9 +8,9 @@ class PySysCheck:
     def __init__(self):
         # init the initial json data
         self.system_data = {
-            "timestamp": str(datetime.datetime.now()),
-            "report_name": "PySysCheck Hardware Report",
-            "device_info": {}
+            'timestamp': str(datetime.datetime.now()),
+            'report_name': 'PySysCheck Hardware Report',
+            'device_info': {}
         }
 
 
@@ -30,13 +30,13 @@ class PySysCheck:
     def _parse_cpu_data(self, content):
         # init a cpu_data
         cpu_data = {
-                "vendor": "Unknown",
-                "model_name": "Unknown",
-                "topology": {"physical_cores": 0, "logical_threads": 0},
-                "virtualization_support": False,
-                "cpu_family": "Unknown",
-                "cpu_model": "Unknown",
-                "cache": "Unknown"
+                'vendor': 'Unknown',
+                'model_name': 'Unknown',
+                'topology': {'physical_cores': 0, 'logical_threads': 0},
+                'virtualization_support': False,
+                'cpu_family': 'Unknown',
+                'cpu_model': 'Unknown',
+                'cache': 'Unknown'
         }
         # parse the logical thread and check error
         cpu_groups = content.strip().split("\n\n")
@@ -54,46 +54,46 @@ class PySysCheck:
 
 
             # save each value in their respective position
-            if "vendor_id" in key:
+            if 'vendor_id' in key:
                 cpu_data['vendor'] = value
             
-            elif "model name" in key:
+            elif 'model name' in key:
                 cpu_data['model_name'] = value
 
-            elif key=="model":
+            elif key == 'model':
                 if value.isdigit():
                     cpu_data['cpu_model'] = int(value)
 
             
-            elif "siblings" in key:
+            elif 'siblings' in key:
                 if value.isdigit():
                     cpu_data['topology']['logical_threads'] = int(value)
 
-            elif "cpu cores" in key:
+            elif 'cpu cores' in key:
                 if value.isdigit():
                     cpu_data['topology']['physical_cores'] = int(value)
 
-            elif "cache size" in key:
+            elif 'cache size' in key:
                 cpu_data['cache'] = value
 
-            elif "cpu family" in key:            
+            elif 'cpu family' in key:            
                 if value.isdigit():
                     cpu_data['cpu_family'] = int(value)
                     
 
-            elif "flags" in key:
-                if "svm" in value or "vmx" in value:
+            elif 'flags' in key:
+                if 'svm' in value or 'vmx' in value:
                     cpu_data['virtualization_support'] = True
                 
         return cpu_data
 
     def _map_memory_key(self, key):
-        if key == "MemTotal":
-            return "mem_total"
-        elif key == "MemAvailable":
-            return "mem_available"
-        elif key == "SwapTotal":
-            return "swap_total"
+        if key == 'MemTotal':
+            return 'mem_total'
+        elif key == 'MemAvailable':
+            return 'mem_available'
+        elif key == 'SwapTotal':
+            return 'swap_total'
         
     def _parse_memory_data(self, content):
         mem_data = {}
@@ -106,7 +106,7 @@ class PySysCheck:
             value = value.strip()
             key = key.strip()
 
-            if key in ["MemTotal","MemAvailable", "SwapTotal"]:
+            if key in ['MemTotal','MemAvailable', 'SwapTotal']:
                 clean_value = value.split("kB")[0].strip()
 
                 base = decimal.Decimal(int(clean_value))
@@ -144,54 +144,108 @@ class PySysCheck:
 
     def get_cpu_info(self):
         try:
-            content = self._read_file("/proc/cpuinfo")
+            content = self._read_file('/proc/cpuinfo')
             if not content:
-                self.system_data['device_info']['cpu'] = {"error" : "cpuinfo is empty"}
+                self.system_data['device_info']['cpu'] = {'error' : 'cpuinfo is empty'}
             
             cpu_data = self._parse_cpu_data(content)
             self.system_data['device_info']['cpu'] = cpu_data
 
         # if /proc/cpuinfo doesn't exist
         except FileNotFoundError:
-            self.system_data['device_info']['cpu'] = {"error": "/proc/cpuinfo not found"}
+            self.system_data['device_info']['cpu'] = {'error': '/proc/cpuinfo not found'}
 
         # any unknown exception
         except Exception as e:
-            self.system_data['device_info']['cpu'] = {"error": f"Parsing error: {str(e)}"}
+            self.system_data['device_info']['cpu'] = {'error': f'Parsing error: {str(e)}'}
     
 
     def get_memory_info(self):
         try:
-            content = self._read_file("/proc/meminfo")
+            content = self._read_file('/proc/meminfo')
             if not content:
-                self.system_data['device_info']['memory'] = {"error": "meminfo is empty"}
+                self.system_data['device_info']['memory'] = {'error': 'meminfo is empty'}
             
             mem_data = self._parse_memory_data(content)
             self.system_data['device_info']['memory'] = mem_data
 
         # if /proc/meminfo doesn't exist
         except FileNotFoundError:
-            self.system_data['device_info']['memory'] = {"error": "/proc/meminfo not found"}
+            self.system_data['device_info']['memory'] = {'error': '/proc/meminfo not found'}
 
         # any unknown exception
         except Exception as e:
-            self.system_data['device_info']['memory'] = {"error": f"Parsing error: {str(e)}"}
+            self.system_data['device_info']['memory'] = {'error': f'Parsing error: {str(e)}'}
 
 
-    def get_usb_data(self):
+    def get_usb_info(self):
         try:
-            content = self._run_command(["lsusb"])
+            content = self._run_command(['lsusb'])
             
             if not content:
-                self.system_data['device_info']['usb'] = {"error" : "lsusb command failed or returned empty"}
+                self.system_data['device_info']['usb'] = {'error' : 'lsusb command failed or returned empty'}
                 return
             
             usb_data = self._parse_usb_data(content)
             self.system_data['device_info']["usb"] = usb_data
 
         except FileNotFoundError:
-             self.system_data['device_info']['usb'] = {"error": "lsusb command not found"}
+             self.system_data['device_info']['usb'] = {'error': 'lsusb command not found'}
         except Exception as e:
-            self.system_data['device_info']['usb'] = {"error" : f"{str(e)}"}
+            self.system_data['device_info']['usb'] = {'error': f'{str(e)}'}
+
+    def get_network_info(self):
+        self.system_data['device_info']['network'] = {}
+        net_path = '/sys/class/net'
+        
+        try:
+            if not os.path.exists(net_path):
+                self.system_data['device_info']['network'] = {'error': '/sys/class/net not found'}
+                return
+
+            for iface in os.listdir(net_path):
+                # skip the localhost
+                if iface == 'lo': continue 
+                
+                # init interface dict
+                iface_info = {'mac': 'Unknown', 'state': 'Unknown'}
+                
+                # create folder paths
+                mac_path = os.path.join(net_path, iface, 'address')
+                state_path = os.path.join(net_path, iface, 'operstate')
+                
+                # read the mac address files
+                try:
+                    mac = self._read_file(mac_path).strip()
+                    if mac: iface_info['mac'] = mac
+                except: pass
+
+                # read the state files
+                try:
+                    state = self._read_file(state_path).strip()
+                    if state: iface_info['state'] = state
+                except: pass
+                
+                self.system_data['device_info']['network'][iface] = iface_info
+
+        except Exception as e:
+            self.system_data['device_info']['network'] = {'error': f'Network scan error: {str(e)}'}
+        
+
+    def save_report(self):
+        self.get_cpu_info()
+        self.get_memory_info()
+        self.get_network_info()
+        self.get_usb_info()
+        filename = f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
+        try:
+            with open(filename, 'w') as f:
+                json.dump(self.system_data,f, indent=4)
+            print(f'Report saved successfully: {filename}')
+        except Exception as e:
+            print(f'Error saving report: {e}')
 
 
+if __name__ == '__main__':
+    psc = PySysCheck()
+    psc.save_report()
