@@ -233,6 +233,36 @@ class PySysCheck:
                     gpus.append({'model': full_name, 'vendor': vendor})
         return gpus
 
+    def _check_hotplug_events(self):
+        hotplug_data = {"status": "Inactive", "recent_events": []}
+        try:
+            output = self._run_command(['dmesg'])
+            # sudo privaliges not granted
+            # or dmesg failed
+            if not output:
+                hotplug_data["status"] = "Permission Denied / Empty"
+                return hotplug_data
+
+            lines = output.split('\n')
+            found_events = []
+
+
+            # just look the last 10 events
+            for line in  reversed(lines):
+                if len(found_events) > 10: break
+                    
+                line_lower = line.lower()
+                if 'usb' in line and ('new' in line or 'disconnect' in line):
+                    found_events.append(line.strip())
+            if found_events:
+                hotplug_data["status"] = "Active"
+                hotplug_data["recent_events"] = found_events 
+
+        except Exception as e:
+            hotplug_data["error"] = f"Error parsing dmesg: {str(e)}"
+
+        return hotplug_data
+
     def get_gpu_info(self):
         try:
             content = self._run_command(['lspci'])
@@ -287,16 +317,16 @@ class PySysCheck:
             content = self._run_command(['lsusb'])
             
             if not content:
-                self.system_data['device_info']['usb'] = {'error' : 'lsusb command failed or returned empty'}
+                self.system_data['device_info']['usb'] = [{'error' : 'lsusb command failed or returned empty'}]
                 return
             
             usb_data = self._parse_usb_data(content)
             self.system_data['device_info']["usb"] = usb_data
 
         except FileNotFoundError:
-             self.system_data['device_info']['usb'] = {'error': 'lsusb command not found'}
+             self.system_data['device_info']['usb'] = [{'error': 'lsusb command not found'}]
         except Exception as e:
-            self.system_data['device_info']['usb'] = {'error': f'{str(e)}'}
+            self.system_data['device_info']['usb'] = [{'error': f'{str(e)}'}]
 
     def get_network_info(self):
         self.system_data['device_info']['network'] = {}
@@ -380,16 +410,69 @@ class PySysCheck:
         except Exception as e:
             self.system_data['device_info']['disk'] = {'error' : f'Disk scan error: {e}'}
 
+    def perform_health_checks(self):
+        checks = {
+            'usb_subsystem_active' : 'FAIL',
+            'gpu_detected': 'FAIL',
+            'network_connectivity': 'FAIL',
+            'ssd_present': 'FAIL'
+        }
+
+        dev_info = self.system_data.get('device_info', {})
+
+        hotplug_data = self._check_hotplug_events()
+        self.system_data['device_info']['hotplug_analysis'] = hotplug_data
+
+        usb_list = dev_info.get('usb', [])
+        has_usb_devices = usb_list and isinstance(usb_list, list) and 'error'not in str(usb_list[0]).lower()
+        is_hotplug_active = hotplug_data.get('status') == 'Active'
+
+        if has_usb_devices or is_hotplug_active:
+            checks['usb_subsystem_active'] = 'PASS'
+
+        gpus = dev_info.get('gpu', [])
+        if gpus and isinstance(gpus, list) and "error" not in str(gpus[0]).lower():
+            checks['gpu_detected'] = "PASS"
+
+        net_info = dev_info.get('network', {})
+        if isinstance(net_info, dict) and "error" not in net_info:
+            for iface, details in net_info.items():
+                if details.get('state') == 'up':
+                    checks['network_connectivity'] = "PASS"
+                    break
+
+
+        disk_info = dev_info.get('disk', {})
+        if isinstance(disk_info, dict) and "error" not in disk_info:
+            for disk, details in disk_info.items():
+                if details.get('type') == 'SSD':
+                    checks['ssd_present'] = "PASS"
+                    break
+        
+        self.system_data['test_results'] = checks
+
+
+    def run_all_checks(self):
+        print("Starting PySysCheck hardware probe...")
+        self.get_cpu_info()
+        self.get_memory_info()
+        self.get_disk_info()   # Storage eklendi
+        self.get_usb_info()
+        self.get_network_info()
+        self.get_os_info()     # OS/Kernel eklendi
+        self.get_gpu_info()    # GPU eklendi
+
+        print("System probe completed.")
+
+        # Analiz Modülü (YENİ)
+        print("Running automated health checks...")
+        self.perform_health_checks()
+
+        print("health checks completed.")
+
 
 
     def save_report(self):
-        self.get_cpu_info()
-        self.get_memory_info()
-        self.get_network_info()
-        self.get_usb_info()
-        self.get_os_info()
-        self.get_disk_info()
-        self.get_gpu_info()
         filename = f"report_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json"
         try:
             with open(filename, 'w') as f:
@@ -401,4 +484,5 @@ class PySysCheck:
 
 if __name__ == '__main__':
     psc = PySysCheck()
+    psc.run_all_checks()
     psc.save_report()
